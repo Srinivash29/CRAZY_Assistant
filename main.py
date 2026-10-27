@@ -1,4 +1,5 @@
-
+import speech_recognition as sr
+import pyttsx3
 import os
 import sys
 from pathlib import Path
@@ -67,7 +68,69 @@ class AIWorker(QThread):
                 "See the VS Code terminal for details."
             )
 
+class VoiceInputWorker(QThread):
+    recognized = pyqtSignal(str)
+    error_occurred = pyqtSignal(str)
+    status_changed = pyqtSignal(str)
 
+    def run(self):
+        try:
+            recognizer = sr.Recognizer()
+
+            with sr.Microphone(
+                device_index=1,
+                sample_rate=44100
+            ) as source:
+                self.status_changed.emit("STATUS: LISTENING...")
+                recognizer.adjust_for_ambient_noise(
+                    source, duration=0.5
+                )
+                audio = recognizer.listen(
+                    source, timeout=8, phrase_time_limit=10
+                )
+
+            self.status_changed.emit("STATUS: RECOGNIZING SPEECH...")
+            text = recognizer.recognize_google(audio)
+
+            if text.strip():
+                self.recognized.emit(text)
+            else:
+                self.error_occurred.emit(
+                    "No speech was recognized."
+                )
+
+        except sr.WaitTimeoutError:
+            self.error_occurred.emit(
+                "No speech detected. Please try again."
+            )
+        except sr.UnknownValueError:
+            self.error_occurred.emit(
+                "Sorry, I couldn't understand your speech."
+            )
+        except Exception as error:
+            self.error_occurred.emit(
+                f"Voice input failed: {type(error).__name__}: {error}"
+            )
+
+
+class SpeechWorker(QThread):
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, text):
+        super().__init__()
+        self.text = text
+
+    def run(self):
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty("rate", 175)
+            engine.say(self.text)
+            engine.runAndWait()
+            engine.stop()
+        except Exception as error:
+            self.error_occurred.emit(
+                f"Speech output failed: {type(error).__name__}"
+            )
 class CrazyAssistant(QMainWindow):
 
     def __init__(self):
@@ -89,6 +152,8 @@ class CrazyAssistant(QMainWindow):
 
         self.worker = None
         self.busy = False
+        self.voice_worker = None
+        self.tts_worker = None
 
         self.setStyleSheet("""
             QMainWindow, QWidget {
@@ -160,8 +225,12 @@ class CrazyAssistant(QMainWindow):
         self.send_button = QPushButton("SEND")
         self.send_button.clicked.connect(self.send_message)
 
+        self.listen_button = QPushButton("LISTEN")
+        self.listen_button.clicked.connect(self.start_listening)
+
         input_layout.addWidget(self.message)
         input_layout.addWidget(self.send_button)
+        input_layout.addWidget(self.listen_button)
 
         self.status = QLabel("STATUS: READY | MODEL: GROQ")
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -213,6 +282,26 @@ class CrazyAssistant(QMainWindow):
         })
         self.chat.append(f"CRAZY: {answer}")
 
+        self.status.setText("STATUS: CRAZY IS SPEAKING...")
+
+        self.tts_worker = SpeechWorker(answer)
+        self.tts_worker.error_occurred.connect(
+            self.on_speech_error
+        )
+        self.tts_worker.finished.connect(
+            self.on_speech_finished
+        )
+        self.tts_worker.start()
+
+    def on_speech_error(self, message):
+        self.chat.append(f"CRAZY: {message}")
+
+    def on_speech_finished(self):
+        self.tts_worker = None
+
+        if not self.busy:
+            self.status.setText("STATUS: READY | MODEL: GROQ")
+
     def on_error(self, message):
         # Remove the unanswered user message from model history
         if self.history and self.history[-1]["role"] == "user":
@@ -225,23 +314,85 @@ class CrazyAssistant(QMainWindow):
         self.busy = False
         self.send_button.setEnabled(True)
         self.message.setEnabled(True)
+        self.listen_button.setEnabled(True)
         self.message.setFocus()
 
-        if self.status.text() != "STATUS: REQUEST FAILED":
+        if (
+            self.tts_worker is not None
+            and self.tts_worker.isRunning()
+        ):
+            self.status.setText("STATUS: CRAZY IS SPEAKING...")
+        elif self.status.text() != "STATUS: REQUEST FAILED":
             self.status.setText("STATUS: READY | MODEL: GROQ")
 
         self.worker = None
 
     def closeEvent(self, event):
-        # Avoid closing the window while its worker is active
-        if self.worker is not None and self.worker.isRunning():
+        workers = [
+            self.worker,
+            self.voice_worker,
+            self.tts_worker
+        ]
+
+        if any(
+            worker is not None and worker.isRunning()
+            for worker in workers
+        ):
             self.chat.append(
-                "CRAZY: Please wait for the current request to finish."
+                "CRAZY: Please wait for the current task to finish."
             )
             event.ignore()
             return
 
         event.accept()
+    def start_listening(self):
+        if self.busy:
+            return
+
+        if (
+            self.voice_worker is not None
+            and self.voice_worker.isRunning()
+        ):
+            return
+
+        self.listen_button.setEnabled(False)
+        self.send_button.setEnabled(False)
+        self.message.setEnabled(False)
+
+        self.voice_worker = VoiceInputWorker()
+        self.voice_worker.status_changed.connect(
+            self.status.setText
+        )
+        self.voice_worker.recognized.connect(
+            self.on_voice_recognized
+        )
+        self.voice_worker.error_occurred.connect(
+            self.on_voice_error
+        )
+        self.voice_worker.finished.connect(
+            self.on_voice_finished
+        )
+        self.voice_worker.start()
+
+    def on_voice_recognized(self, text):
+        self.chat.append(f"You (voice): {text}")
+        self.message.setText(text)
+        self.send_message()
+
+    def on_voice_error(self, message):
+        self.chat.append(f"CRAZY: {message}")
+        self.status.setText("STATUS: VOICE INPUT FAILED")
+
+    def on_voice_finished(self):
+        self.voice_worker = None
+        self.listen_button.setEnabled(True)
+
+        if not self.busy:
+            self.send_button.setEnabled(True)
+            self.message.setEnabled(True)
+
+            if self.status.text() != "STATUS: VOICE INPUT FAILED":
+                self.status.setText("STATUS: READY | MODEL: GROQ")
 
 
 if __name__ == "__main__":
