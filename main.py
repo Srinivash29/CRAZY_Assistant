@@ -12,6 +12,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from groq import Groq
 
+import psutil
+from PyQt6.QtCore import QTimer
+
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -166,18 +169,18 @@ class SpeechWorker(QThread):
             self.error_occurred.emit(
                 f"Speech output failed: {type(error).__name__}"
             )
-class CrazyAssistant(QMainWindow):
+class AXIOMAssistant(QMainWindow):
 
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("CRAZY AI Assistant")
+        self.setWindowTitle("AXIOM AI Assistant")
         self.setMinimumSize(800, 550)
 
         self.system_message = {
             "role": "system",
             "content": (
-                "You are CRAZY, a helpful personal Windows AI assistant. "
+                "You are AXIOM, a helpful personal Windows AI assistant. "
                 "Address the user as sir when natural. "
                 "Give clear, useful answers."
             )
@@ -239,7 +242,7 @@ class CrazyAssistant(QMainWindow):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(15)
 
-        title = QLabel("CRAZY")
+        title = QLabel("AXIOM")
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -249,20 +252,20 @@ class CrazyAssistant(QMainWindow):
         self.chat = QTextEdit()
         self.chat.setReadOnly(True)
 
-        self.chat.append("CRAZY: System initialized successfully.")
-        self.chat.append("CRAZY: Choose LOCAL or ONLINE mode below.")
+        self.chat.append("AXIOM: System initialized successfully.")
+        self.chat.append("AXIOM: Choose LOCAL or ONLINE mode below.")
         saved_messages = self.load_recent_messages(limit=40)
         if saved_messages:
             self.chat.append("--- Previous conversation history ---")
             for item in saved_messages:
-                speaker = "You" if item["role"] == "user" else "CRAZY"
+                speaker = "You" if item["role"] == "user" else "AXIOM"
                 self.chat.append(f"{speaker}: {item['content']}")
             self.chat.append("--- End of saved history ---")
 
         input_layout = QHBoxLayout()
 
         self.message = QLineEdit()
-        self.message.setPlaceholderText("Ask CRAZY anything...")
+        self.message.setPlaceholderText("Ask AXIOM anything...")
         self.message.returnPressed.connect(self.send_message)
 
         self.provider_box = QComboBox()
@@ -281,13 +284,29 @@ class CrazyAssistant(QMainWindow):
         input_layout.addWidget(self.listen_button)
 
         self.status = QLabel("STATUS: READY | MODEL: GROQ")
+        self.system_metrics = QLabel("CPU: ---%  |  RAM: ---%")
+        self.system_metrics.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
+        layout.addWidget(self.system_metrics)
         layout.addWidget(self.chat, 1)
         layout.addLayout(input_layout)
         layout.addWidget(self.status)
+        self.metrics_timer = QTimer(self)
+        self.metrics_timer.timeout.connect(self.update_system_metrics)
+        self.metrics_timer.start(1000)
+
+        self.update_system_metrics()
+
+    def update_system_metrics(self):
+        cpu = psutil.cpu_percent()
+        ram = psutil.virtual_memory().percent
+
+        self.system_metrics.setText(
+            f"CPU: {cpu:.1f}%  |  RAM: {ram:.1f}%"
+        )
 
     def initialize_memory(self):
         """Create the local SQLite database for conversation memory."""
@@ -343,7 +362,7 @@ class CrazyAssistant(QMainWindow):
         provider = self.current_provider()
         if provider == "ONLINE" and not os.getenv("GROQ_API_KEY"):
             self.chat.append(
-                "CRAZY: API key not found. Check your .env file."
+                "AXIOM: API key not found. Check your .env file."
             )
             self.status.setText("STATUS: API KEY MISSING")
             return
@@ -364,7 +383,7 @@ class CrazyAssistant(QMainWindow):
         self.message.setEnabled(False)
         self.provider_box.setEnabled(False)
         model_label = "OLLAMA" if provider == "LOCAL" else "GROQ"
-        self.status.setText(f"STATUS: CRAZY IS THINKING | MODEL: {model_label}...")
+        self.status.setText(f"STATUS: AXIOM IS THINKING | MODEL: {model_label}...")
 
         # Keep API calls in a worker thread so the GUI stays responsive.
         self.worker = AIWorker(list(self.history), provider)
@@ -384,9 +403,9 @@ class CrazyAssistant(QMainWindow):
             getattr(self, "pending_provider", self.current_provider())
         )
         self.pending_user_text = ""
-        self.chat.append(f"CRAZY: {answer}")
+        self.chat.append(f"AXIOM: {answer}")
 
-        self.status.setText("STATUS: CRAZY IS SPEAKING...")
+        self.status.setText("STATUS: AXIOM IS SPEAKING...")
 
         self.tts_worker = SpeechWorker(answer)
         self.tts_worker.error_occurred.connect(
@@ -398,7 +417,7 @@ class CrazyAssistant(QMainWindow):
         self.tts_worker.start()
 
     def on_speech_error(self, message):
-        self.chat.append(f"CRAZY: {message}")
+        self.chat.append(f"AXIOM: {message}")
 
     def on_speech_finished(self):
         self.tts_worker = None
@@ -413,7 +432,7 @@ class CrazyAssistant(QMainWindow):
             self.history.pop()
         self.pending_user_text = ""
 
-        self.chat.append(f"CRAZY: {message}")
+        self.chat.append(f"AXIOM: {message}")
         self.status.setText("STATUS: REQUEST FAILED")
 
     def on_finished(self):
@@ -428,7 +447,7 @@ class CrazyAssistant(QMainWindow):
             self.tts_worker is not None
             and self.tts_worker.isRunning()
         ):
-            self.status.setText("STATUS: CRAZY IS SPEAKING...")
+            self.status.setText("STATUS: AXIOM IS SPEAKING...")
         elif self.status.text() != "STATUS: REQUEST FAILED":
             model = "OLLAMA" if self.current_provider() == "LOCAL" else "GROQ"
             self.status.setText(f"STATUS: READY | MODEL: {model}")
@@ -447,7 +466,7 @@ class CrazyAssistant(QMainWindow):
             for worker in workers
         ):
             self.chat.append(
-                "CRAZY: Please wait for the current task to finish."
+                "AXIOM: Please wait for the current task to finish."
             )
             event.ignore()
             return
@@ -488,7 +507,7 @@ class CrazyAssistant(QMainWindow):
         self.send_message()
 
     def on_voice_error(self, message):
-        self.chat.append(f"CRAZY: {message}")
+        self.chat.append(f"AXIOM: {message}")
         self.status.setText("STATUS: VOICE INPUT FAILED")
 
     def on_voice_finished(self):
@@ -507,7 +526,7 @@ class CrazyAssistant(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    window = CrazyAssistant()
+    window = AXIOMAssistant()
     window.show()
 
     sys.exit(app.exec())
